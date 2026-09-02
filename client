@@ -1,0 +1,183 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+import numpy as np
+import flwr as fl
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+# from config import BATCH_SIZE, LR, LOCAL_EPOCHS
+from config import (
+    BATCH_SIZE, LR, LOCAL_EPOCHS,
+    ENABLE_NOISE, NOISE_STD,
+    ENABLE_COMPRESSION, COMPRESSION_DECIMALS
+)
+from dataset import get_client_datasets
+from model import CNNLSTMRegressor
+
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def get_parameters(model):
+    return [val.detach().cpu().numpy() for _, val in model.state_dict().items()]
+
+
+def set_parameters(model, parameters):
+    params_dict = zip(model.state_dict().keys(), parameters)
+    state_dict = {k: torch.tensor(v) for k, v in params_dict}
+    model.load_state_dict(state_dict, strict=True)
+
+# noise
+def add_noise_to_parameters(parameters, noise_std):
+    noisy_parameters = []
+    for param in parameters:
+        noise = np.random.normal(loc=0.0, scale=noise_std, size=param.shape)
+        noisy_param = param + noise.astype(np.float32)
+        noisy_parameters.append(noisy_param)
+    return noisy_parameters
+
+
+# compress
+def compress_parameters(parameters, decimals):
+    compressed = []
+    for param in parameters:
+        compressed_param = np.round(param, decimals=decimals)
+        compressed.append(compressed_param)
+    return compressed
+
+def train(model, loader, epochs, device):
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+    model.train()
+    total_loss = 0.0
+
+    for _ in range(epochs):
+        epoch_loss = 0.0
+        for X, y in loader:
+            X = X.to(device)
+            y = y.to(device)
+
+            optimizer.zero_grad()
+            preds = model(X)
+            loss = criterion(preds, y)
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item() * X.size(0)
+
+        total_loss = epoch_loss / len(loader.dataset)
+
+    return total_loss
+
+
+@torch.no_grad()
+def evaluate(model, loader, device):
+    criterion = nn.MSELoss()
+    model.eval()
+
+    total_loss = 0.0
+    all_preds = []
+    all_targets = []
+
+    for X, y in loader:
+        X = X.to(device)
+        y = y.to(device)
+
+        preds = model(X)
+        loss = criterion(preds, y)
+
+        total_loss += loss.item() * X.size(0)
+        all_preds.append(preds.cpu())
+        all_targets.append(y.cpu())
+
+    avg_loss = total_loss / len(loader.dataset)
+
+    all_preds = torch.cat(all_preds, dim=0)
+    all_targets = torch.cat(all_targets, dim=0)
+
+    diff = all_preds - all_targets
+    mae = torch.abs(diff).mean(dim=0)
+    rmse = torch.sqrt((diff ** 2).mean(dim=0))
+
+    metrics = {
+        "resp_mae": mae[0].item(),
+        "heart_mae": mae[1].item(),
+        "resp_rmse": rmse[0].item(),
+        "heart_rmse": rmse[1].item(),
+    }
+    return avg_loss, metrics
+
+
+class VitalSignClient(fl.client.NumPyClient):
+    def __init__(self, client_id):
+        self.client_id = client_id
+
+        self.model = CNNLSTMRegressor().to(DEVICE)
+
+        train_dataset, test_dataset = get_client_datasets(client_id=client_id)
+        self.train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+        self.test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+    def get_parameters(self, config):
+        return get_parameters(self.model)
+
+    def fit(self, parameters, config):
+        set_parameters(self.model, parameters)
+
+        train_loss = train(
+            self.model,
+            self.train_loader,
+            epochs=LOCAL_EPOCHS,
+            device=DEVICE
+        )
+
+        print(f"[Client {self.client_id}] Train Loss: {train_loss:.4f}")
+
+       # return get_parameters(self.model), len(self.train_loader.dataset), {"train_loss": train_loss}
+        updated_parameters = get_parameters(self.model)
+
+        # noise
+        if ENABLE_NOISE:
+            updated_parameters = add_noise_to_parameters(updated_parameters, NOISE_STD)
+
+        # compression
+        if ENABLE_COMPRESSION:
+            updated_parameters = compress_parameters(updated_parameters, COMPRESSION_DECIMALS)
+
+        return updated_parameters, len(self.train_loader.dataset), {"train_loss": train_loss}
+
+    def evaluate(self, parameters, config):
+        set_parameters(self.model, parameters)
+
+        loss, metrics = evaluate(self.model, self.test_loader, DEVICE)
+
+        print(
+            f"[Client {self.client_id}] Eval Loss: {loss:.4f} | "
+            f"Resp MAE: {metrics['resp_mae']:.2f} | "
+            f"Heart MAE: {metrics['heart_mae']:.2f}"
+        )
+
+        return loss, len(self.test_loader.dataset), metrics
+
+
+def main():
+    import sys
+
+    if len(sys.argv) != 2:
+        print("Usage: python client.py <client_id>")
+        print("Example: python client.py 0")
+        return
+
+    client_id = int(sys.argv[1])
+
+    client = VitalSignClient(client_id=client_id)
+    fl.client.start_numpy_client(
+        server_address="127.0.0.1:8080",
+        client=client
+    )
+
+
+if __name__ == "__main__":
+    main()
