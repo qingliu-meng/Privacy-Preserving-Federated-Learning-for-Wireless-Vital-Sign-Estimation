@@ -1,0 +1,37 @@
+SEQ_LEN = 500          # signal length
+FS = 50                # sampling rate
+NUM_CLIENTS = 3        # number of clients
+
+# number of samples per client
+SAMPLES_PER_CLIENT = 600
+
+#Vital sign ranges (regression task) Unit: beats per minute (bpm)
+RESP_MIN = 12
+RESP_MAX = 24
+
+HEART_MIN = 60
+HEART_MAX = 120
+
+# Noise rates vary across different clients, which is used to introduce heterogeneity.
+CLIENT_NOISE_LEVELS = [0.05, 0.10, 0.15]
+
+# Training parameters
+BATCH_SIZE = 32
+LR = 1e-3
+EPOCHS = 10
+
+# Train/test split
+TEST_RATIO = 0.2
+RANDOM_SEED = 42
+
+#Federated learning parameters
+ROUNDS = 15
+LOCAL_EPOCHS = 2
+
+# Privacy and compression parameters (to be used later)
+
+ENABLE_NOISE = False
+NOISE_STD = 0.005
+
+ENABLE_COMPRESSION = True
+COMPRESSION_DECIMALS = 1
