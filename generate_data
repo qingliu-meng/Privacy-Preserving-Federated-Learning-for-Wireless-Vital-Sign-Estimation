@@ -1,0 +1,112 @@
+import os
+import numpy as np
+from config import (
+    SEQ_LEN, FS, NUM_CLIENTS, SAMPLES_PER_CLIENT,
+    RESP_MIN, RESP_MAX, HEART_MIN, HEART_MAX,
+    CLIENT_NOISE_LEVELS, RANDOM_SEED
+)
+
+np.random.seed(RANDOM_SEED)
+
+
+def bpm_to_hz(bpm):
+    return bpm / 60.0
+
+
+def generate_single_signal(seq_len, fs, resp_bpm, heart_bpm, noise_std):
+
+    t = np.arange(seq_len) / fs
+
+    resp_hz = bpm_to_hz(resp_bpm)
+    heart_hz = bpm_to_hz(heart_bpm)
+
+  
+    resp_phase = np.random.uniform(0, 2 * np.pi)
+    heart_phase = np.random.uniform(0, 2 * np.pi)
+
+
+    resp_amp = np.random.uniform(0.8, 1.2)
+    heart_amp = np.random.uniform(0.3, 0.7)
+
+
+    resp_signal = resp_amp * np.sin(2 * np.pi * resp_hz * t + resp_phase)
+    heart_signal = heart_amp * np.sin(2 * np.pi * heart_hz * t + heart_phase)
+
+
+    drift_freq = np.random.uniform(0.01, 0.05)
+    drift_amp = np.random.uniform(0.05, 0.15)
+    drift = drift_amp * np.sin(2 * np.pi * drift_freq * t)
+
+
+    noise = np.random.normal(0, noise_std, size=seq_len)
+
+    signal = resp_signal + heart_signal + drift + noise
+
+    return signal.astype(np.float32)
+
+
+def generate_client_dataset(client_id, num_samples, noise_std):
+
+    X = []
+    y = []
+
+    if client_id == 0:
+        resp_low, resp_high = 12, 20
+        heart_low, heart_high = 60, 90
+    elif client_id == 1:
+        resp_low, resp_high = 14, 24
+        heart_low, heart_high = 70, 105
+    else:
+        resp_low, resp_high = 12, 22
+        heart_low, heart_high = 80, 120
+
+
+    resp_low = max(resp_low, RESP_MIN)
+    resp_high = min(resp_high, RESP_MAX)
+    heart_low = max(heart_low, HEART_MIN)
+    heart_high = min(heart_high, HEART_MAX)
+
+    for _ in range(num_samples):
+        resp_bpm = np.random.uniform(resp_low, resp_high)
+        heart_bpm = np.random.uniform(heart_low, heart_high)
+
+        signal = generate_single_signal(
+            seq_len=SEQ_LEN,
+            fs=FS,
+            resp_bpm=resp_bpm,
+            heart_bpm=heart_bpm,
+            noise_std=noise_std
+        )
+
+        X.append(signal)
+        y.append([resp_bpm, heart_bpm])
+
+    X = np.array(X, dtype=np.float32)
+    y = np.array(y, dtype=np.float32)
+
+    return X, y
+
+
+def main():
+    os.makedirs("data", exist_ok=True)
+
+    for client_id in range(NUM_CLIENTS):
+        noise_std = CLIENT_NOISE_LEVELS[client_id]
+        X, y = generate_client_dataset(
+            client_id=client_id,
+            num_samples=SAMPLES_PER_CLIENT,
+            noise_std=noise_std
+        )
+
+        save_path = f"data/client_{client_id}.npz"
+        np.savez(save_path, X=X, y=y)
+
+        print(f"[OK] client_{client_id}.npz saved")
+        print(f"     X shape: {X.shape}")
+        print(f"     y shape: {y.shape}")
+        print(f"     noise_std: {noise_std}")
+        print("-" * 50)
+
+
+if __name__ == "__main__":
+    main()
