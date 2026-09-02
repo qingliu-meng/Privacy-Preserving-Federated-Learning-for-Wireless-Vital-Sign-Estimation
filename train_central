@@ -1,0 +1,148 @@
+import os
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+
+from config import BATCH_SIZE, LR, EPOCHS, NUM_CLIENTS
+from dataset import get_central_datasets
+from model import CNNLSTMRegressor
+
+
+def compute_mae_rmse(preds, targets):
+
+    diff = preds - targets
+    abs_diff = torch.abs(diff)
+    sq_diff = diff ** 2
+
+    mae = abs_diff.mean(dim=0)          # (2,)
+    rmse = torch.sqrt(sq_diff.mean(dim=0))
+
+    return mae[0].item(), mae[1].item(), rmse[0].item(), rmse[1].item()
+
+
+def train_one_epoch(model, loader, criterion, optimizer, device):
+    model.train()
+    total_loss = 0.0
+
+    for X, y in loader:
+        X = X.to(device)
+        y = y.to(device)
+
+        optimizer.zero_grad()
+        preds = model(X)
+        loss = criterion(preds, y)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * X.size(0)
+
+    avg_loss = total_loss / len(loader.dataset)
+    return avg_loss
+
+
+@torch.no_grad()
+def evaluate(model, loader, criterion, device):
+    model.eval()
+    total_loss = 0.0
+
+    all_preds = []
+    all_targets = []
+
+    for X, y in loader:
+        X = X.to(device)
+        y = y.to(device)
+
+        preds = model(X)
+        loss = criterion(preds, y)
+
+        total_loss += loss.item() * X.size(0)
+
+        all_preds.append(preds.cpu())
+        all_targets.append(y.cpu())
+
+    avg_loss = total_loss / len(loader.dataset)
+
+    all_preds = torch.cat(all_preds, dim=0)
+    all_targets = torch.cat(all_targets, dim=0)
+
+    resp_mae, heart_mae, resp_rmse, heart_rmse = compute_mae_rmse(all_preds, all_targets)
+
+    return avg_loss, resp_mae, heart_mae, resp_rmse, heart_rmse
+
+
+def plot_curves(train_losses, test_losses, save_path):
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_losses, label="Train Loss")
+    plt.plot(test_losses, label="Test Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("MSE Loss")
+    plt.title("Centralized Training Loss")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def main():
+    os.makedirs("models", exist_ok=True)
+    os.makedirs("figures", exist_ok=True)
+    os.makedirs("results", exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Using device:", device)
+
+    train_dataset, test_dataset = get_central_datasets(num_clients=NUM_CLIENTS)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+    model = CNNLSTMRegressor().to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+
+    train_losses = []
+    test_losses = []
+
+    best_test_loss = float("inf")
+
+    for epoch in range(1, EPOCHS + 1):
+        train_loss = train_one_epoch(model, train_loader, criterion, optimizer, device)
+        test_loss, resp_mae, heart_mae, resp_rmse, heart_rmse = evaluate(
+            model, test_loader, criterion, device
+        )
+
+        train_losses.append(train_loss)
+        test_losses.append(test_loss)
+
+        print(
+            f"Epoch [{epoch}/{EPOCHS}] "
+            f"Train Loss: {train_loss:.4f} | "
+            f"Test Loss: {test_loss:.4f} | "
+            f"Resp MAE: {resp_mae:.2f} | "
+            f"Heart MAE: {heart_mae:.2f} | "
+            f"Resp RMSE: {resp_rmse:.2f} | "
+            f"Heart RMSE: {heart_rmse:.2f}"
+        )
+
+        if test_loss < best_test_loss:
+            best_test_loss = test_loss
+            torch.save(model.state_dict(), "models/central_best.pth")
+
+    plot_curves(train_losses, test_losses, "figures/central_loss.png")
+
+    with open("results/central_metrics.txt", "w", encoding="utf-8") as f:
+        f.write("Centralized Training Results\n")
+        f.write(f"Best Test Loss: {best_test_loss:.6f}\n")
+        f.write(f"Final Train Loss: {train_losses[-1]:.6f}\n")
+        f.write(f"Final Test Loss: {test_losses[-1]:.6f}\n")
+
+    print("\nTraining finished.")
+    print("Best model saved to: models/central_best.pth")
+    print("Loss curve saved to: figures/central_loss.png")
+    print("Metrics saved to: results/central_metrics.txt")
+
+
+if __name__ == "__main__":
+    main()
