@@ -1,0 +1,99 @@
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+from sklearn.model_selection import train_test_split
+
+from config import TEST_RATIO, RANDOM_SEED
+
+
+class VitalSignDataset(Dataset):
+    def __init__(self, X, y):
+        self.X = torch.tensor(X, dtype=torch.float32).unsqueeze(1)  # (N, 1, seq_len)
+        self.y = torch.tensor(y, dtype=torch.float32)               # (N, 2)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
+
+
+def zscore_normalize(X):
+
+    mean = X.mean(axis=1, keepdims=True)
+    std = X.std(axis=1, keepdims=True) + 1e-8
+    return (X - mean) / std
+
+
+def load_client_data(client_id, normalize=True):
+
+    path = f"data/client_{client_id}.npz"
+    data = np.load(path)
+    X = data["X"]
+    y = data["y"]
+
+    if normalize:
+        X = zscore_normalize(X)
+
+    return X, y
+
+
+def split_data(X, y, test_ratio=TEST_RATIO, random_seed=RANDOM_SEED):
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_ratio, random_state=random_seed
+    )
+    return X_train, X_test, y_train, y_test
+
+
+def get_client_datasets(client_id, normalize=True):
+
+    X, y = load_client_data(client_id, normalize=normalize)
+    X_train, X_test, y_train, y_test = split_data(X, y)
+
+    train_dataset = VitalSignDataset(X_train, y_train)
+    test_dataset = VitalSignDataset(X_test, y_test)
+
+    return train_dataset, test_dataset
+
+
+def load_all_clients_data(num_clients=3, normalize=True):
+
+    X_list = []
+    y_list = []
+
+    for client_id in range(num_clients):
+        X, y = load_client_data(client_id, normalize=normalize)
+        X_list.append(X)
+        y_list.append(y)
+
+    X_all = np.concatenate(X_list, axis=0)
+    y_all = np.concatenate(y_list, axis=0)
+
+    return X_all, y_all
+
+
+def get_central_datasets(num_clients=3, normalize=True):
+
+    X_all, y_all = load_all_clients_data(num_clients=num_clients, normalize=normalize)
+    X_train, X_test, y_train, y_test = split_data(X_all, y_all)
+
+    train_dataset = VitalSignDataset(X_train, y_train)
+    test_dataset = VitalSignDataset(X_test, y_test)
+
+    return train_dataset, test_dataset
+
+
+if __name__ == "__main__":
+    # test
+    train_dataset, test_dataset = get_client_datasets(client_id=0)
+    print("Client 0 train size:", len(train_dataset))
+    print("Client 0 test size:", len(test_dataset))
+
+    x, y = train_dataset[0]
+    print("Sample x shape:", x.shape)   # should be (1, 500)
+    print("Sample y shape:", y.shape)   # should be (2,)
+
+    central_train, central_test = get_central_datasets(num_clients=3)
+    print("Central train size:", len(central_train))
+    print("Central test size:", len(central_test))
