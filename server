@@ -1,0 +1,48 @@
+import os
+import flwr as fl
+
+from config import ROUNDS
+
+
+def weighted_average(metrics):
+
+    total_examples = sum(num_examples for num_examples, _ in metrics)
+
+    aggregated = {
+        "resp_mae": 0.0,
+        "heart_mae": 0.0,
+        "resp_rmse": 0.0,
+        "heart_rmse": 0.0,
+    }
+
+    for num_examples, m in metrics:
+        for k in aggregated.keys():
+            aggregated[k] += num_examples * m[k]
+
+    for k in aggregated.keys():
+        aggregated[k] /= total_examples
+
+    return aggregated
+
+
+def main():
+    os.makedirs("results", exist_ok=True)
+
+    strategy = fl.server.strategy.FedAvg(
+        fraction_fit=1.0,
+        fraction_evaluate=1.0,
+        min_fit_clients=3,
+        min_evaluate_clients=3,
+        min_available_clients=3,
+        evaluate_metrics_aggregation_fn=weighted_average,
+    )
+
+    fl.server.start_server(
+        server_address="127.0.0.1:8080",
+        config=fl.server.ServerConfig(num_rounds=ROUNDS),
+        strategy=strategy,
+    )
+
+
+if __name__ == "__main__":
+    main()
