@@ -29,9 +29,9 @@ If you want to save the logs, you can redirect the output to files, for example:
 
 python server.py > results/fedavg/server.txt 2>&1
 
-After training, you can generate result plots by editing the RESULT_DIR path in plot_metrics.py, then running:
+After training, you can generate result plots by editing the RESULT_DIR path in figure.py, then running:
 
-python plot_metrics.py
+python figure.py
 
 The generated figures will be saved in the figures folder.
 
