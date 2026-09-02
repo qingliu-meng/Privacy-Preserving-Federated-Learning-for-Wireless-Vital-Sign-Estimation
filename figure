@@ -1,0 +1,94 @@
+import os
+import re
+import matplotlib.pyplot as plt
+
+
+RESULT_DIR = r"results/fedavg_noise"
+# =================================
+
+FIG_DIR = r"figures"
+
+os.makedirs(FIG_DIR, exist_ok=True)
+
+SERVER_FILE = os.path.join(RESULT_DIR, "server.txt")
+
+
+def parse_server_log(server_file):
+    with open(server_file, "r", encoding="utf-8", errors="ignore") as f:
+        text = f.read()
+
+    def extract_metric(metric_name):
+        pattern = rf"'{metric_name}': \[(.*?)\]"
+        match = re.search(pattern, text, re.S)
+        if not match:
+            return []
+
+        block = match.group(1)
+        pairs = re.findall(r"\((\d+),\s*([0-9.]+)\)", block)
+        return [(int(r), float(v)) for r, v in pairs]
+
+    data = {
+        "resp_mae": extract_metric("resp_mae"),
+        "heart_mae": extract_metric("heart_mae"),
+        "resp_rmse": extract_metric("resp_rmse"),
+        "heart_rmse": extract_metric("heart_rmse"),
+    }
+
+    return data
+
+
+def plot_metrics(data, save_name):
+
+    plt.figure(figsize=(8,5))
+
+    if data["resp_mae"]:
+        x, y = zip(*data["resp_mae"])
+        plt.plot(x, y, marker="o", label="Resp MAE")
+
+    if data["heart_mae"]:
+        x, y = zip(*data["heart_mae"])
+        plt.plot(x, y, marker="s", label="Heart MAE")
+
+    if data["resp_rmse"]:
+        x, y = zip(*data["resp_rmse"])
+        plt.plot(x, y, marker="^", label="Resp RMSE")
+
+    if data["heart_rmse"]:
+        x, y = zip(*data["heart_rmse"])
+        plt.plot(x, y, marker="d", label="Heart RMSE")
+
+    plt.xlabel("Communication Round")
+    plt.ylabel("Metric Value")
+
+    title = save_name.replace("_", " ")
+    plt.title(title)
+
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    save_path = os.path.join(FIG_DIR, f"{save_name}_metrics.png")
+
+    plt.savefig(save_path, dpi=300)
+
+    plt.close()
+
+    print("Saved:", save_path)
+
+
+def main():
+
+    if not os.path.exists(SERVER_FILE):
+        print("Cannot find:", SERVER_FILE)
+        return
+
+    data = parse_server_log(SERVER_FILE)
+
+
+    folder_name = os.path.basename(RESULT_DIR)
+
+    plot_metrics(data, folder_name)
+
+
+if __name__ == "__main__":
+    main()
